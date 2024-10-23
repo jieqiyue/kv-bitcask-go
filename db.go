@@ -127,6 +127,31 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 	return logRecord.Value, nil
 }
 
+// Delete 先判断该删除是否有效，如果是无效的，就不要进磁盘，不然万一一直删除一个不存在的key，就会导致数据文件一直增大。
+func (db *DB) Delete(key []byte) error {
+	if len(key) == 0 {
+		return ErrKeyIsEmpty
+	}
+
+	if pos := db.index.Get(key); pos == nil {
+		return nil
+	}
+
+	// 构造 LogRecord，标识其类型为删除
+	logRecord := &data.LogRecord{Key: key, Type: data.LogRecordDeleted}
+	_, err := db.appendLogRecord(logRecord)
+	if err != nil {
+		return nil
+	}
+
+	ok := db.index.Delete(key)
+	if !ok {
+		return ErrIndexUpdateFailed
+	}
+
+	return nil
+}
+
 // 追加写数据到活跃文件中
 func (db *DB) appendLogRecord(logRecord *data.LogRecord) (*data.LogRecordPos, error) {
 	db.mu.Lock()

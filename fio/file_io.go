@@ -2,6 +2,7 @@ package fio
 
 import "os"
 
+// FileIO 封装基础的对于文件的io操作
 type FileIO struct {
 	fd *os.File // 操作系统提供的文件描述符
 }
