@@ -287,11 +287,16 @@ func (db *DB) loadIndexFromDataFiles() error {
 			}
 
 			// 构造内存索引并保存
+			var ok bool
 			logRecordPos := &data.LogRecordPos{Fid: fileId, Offset: offset}
 			if logRecord.Type == data.LogRecordDeleted {
-				db.index.Delete(logRecord.Key)
+				ok = db.index.Delete(logRecord.Key)
 			} else {
-				db.index.Put(logRecord.Key, logRecordPos)
+				ok = db.index.Put(logRecord.Key, logRecordPos)
+			}
+
+			if !ok {
+				return ErrIndexUpdateFailed
 			}
 
 			// 递增 offset，下一次从新的位置开始读取
