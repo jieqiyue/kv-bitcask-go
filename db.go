@@ -20,6 +20,7 @@ type DB struct {
 	olderFiles map[uint32]*data.DataFile // 旧的数据文件，只能用于读
 	index      index.Indexer             // 内存索引
 	fileIds    []int                     // 文件 id，只能在加载索引的时候使用，不能在其他的地方更新和使用
+	seqNo      uint64                    // 事务序列号，全局递增
 }
 
 // Open 打开 bitcask 存储引擎实例
@@ -97,13 +98,13 @@ func (db *DB) Put(key []byte, value []byte) error {
 
 	// 构造 LogRecord 结构体
 	logRecord := &data.LogRecord{
-		Key:   key,
+		Key:   logRecordKeyWithSeq(key, nonTransactionSeqNo),
 		Value: value,
 		Type:  data.LogRecordNormal,
 	}
 
 	// 追加写入到当前活跃数据文件当中
-	pos, err := db.appendLogRecord(logRecord)
+	pos, err := db.appendLogRecordWithLock(logRecord)
 	if err != nil {
 		return err
 	}
@@ -159,6 +160,8 @@ func (db *DB) Fold(fn func(key []byte, value []byte) bool) error {
 		if err != nil {
 			return err
 		}
+
+		// 这里得到的value，都是重新申请的内存空间，fn这个函数如果对这个value进行操作的话，是不会影响到磁盘中的这个值的。
 		if !fn(iterator.Key(), value) {
 			break
 		}
@@ -202,9 +205,14 @@ func (db *DB) Delete(key []byte) error {
 		return nil
 	}
 
-	// 构造 LogRecord，标识其类型为删除
-	logRecord := &data.LogRecord{Key: key, Type: data.LogRecordDeleted}
-	_, err := db.appendLogRecord(logRecord)
+	// 构造 LogRecord，标识其是被删除的
+	logRecord := &data.LogRecord{
+		Key:  logRecordKeyWithSeq(key, nonTransactionSeqNo),
+		Type: data.LogRecordDeleted,
+	}
+
+	// 写入到数据文件当中
+	_, err := db.appendLogRecordWithLock(logRecord)
 	if err != nil {
 		return nil
 	}
@@ -216,12 +224,14 @@ func (db *DB) Delete(key []byte) error {
 
 	return nil
 }
+func (db *DB) appendLogRecordWithLock(logRecord *data.LogRecord) (*data.LogRecordPos, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	return db.appendLogRecord(logRecord)
+}
 
 // 追加写数据到活跃文件中
 func (db *DB) appendLogRecord(logRecord *data.LogRecord) (*data.LogRecordPos, error) {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
 	// 判断当前活跃数据文件是否存在，因为数据库在没有写入的时候是没有文件生成的
 	// 如果为空则初始化数据文件
 	if db.activeFile == nil {
@@ -267,6 +277,9 @@ func (db *DB) appendLogRecord(logRecord *data.LogRecord) (*data.LogRecordPos, er
 
 // 设置当前活跃文件
 // 在访问此方法前必须持有互斥锁
+// 调用时机：
+// 1. 当数据目录下面没有任何数据文件的时候，activeFile就是空的，这个时候就要调用这个方法去创建新的数据文件。
+// 2. 当某一个数据文件的大小达到了配置的额定大小的时候，也需要创建新的activeFile。
 func (db *DB) setActiveDataFile() error {
 	var initialFileId uint32 = 0
 	if db.activeFile != nil {
@@ -312,6 +325,7 @@ func (db *DB) loadDataFiles() error {
 		if err != nil {
 			return err
 		}
+
 		if i == len(fileIds)-1 {
 			// 最后一个，id是最大的，说明是当前活跃文件
 			db.activeFile = dataFile
@@ -330,6 +344,22 @@ func (db *DB) loadIndexFromDataFiles() error {
 	if len(db.fileIds) == 0 {
 		return nil
 	}
+
+	updateIndex := func(key []byte, typ data.LogRecordType, pos *data.LogRecordPos) {
+		var ok bool
+		if typ == data.LogRecordDeleted {
+			ok = db.index.Delete(key)
+		} else {
+			ok = db.index.Put(key, pos)
+		}
+		if !ok {
+			panic("failed to update index at startup")
+		}
+	}
+
+	// 暂存事务数据
+	transactionRecords := make(map[uint64][]*data.TransactionRecord)
+	var currentSeqNo = nonTransactionSeqNo
 
 	// 遍历所有的文件id，处理文件中的记录
 	for i, fid := range db.fileIds {
@@ -352,16 +382,32 @@ func (db *DB) loadIndexFromDataFiles() error {
 			}
 
 			// 构造内存索引并保存
-			var ok bool
 			logRecordPos := &data.LogRecordPos{Fid: fileId, Offset: offset}
-			if logRecord.Type == data.LogRecordDeleted {
-				ok = db.index.Delete(logRecord.Key)
+
+			// 解析 key，拿到事务序列号
+			realKey, seqNo := parseLogRecordKey(logRecord.Key)
+			if seqNo == nonTransactionSeqNo {
+				// 非事务操作，直接更新内存索引
+				updateIndex(realKey, logRecord.Type, logRecordPos)
 			} else {
-				ok = db.index.Put(logRecord.Key, logRecordPos)
+				// 事务完成，对应的 seq no 的数据可以更新到内存索引中
+				if logRecord.Type == data.LogRecordTxnFinished {
+					for _, txnRecord := range transactionRecords[seqNo] {
+						updateIndex(txnRecord.Record.Key, txnRecord.Record.Type, txnRecord.Pos)
+					}
+					delete(transactionRecords, seqNo)
+				} else {
+					logRecord.Key = realKey
+					transactionRecords[seqNo] = append(transactionRecords[seqNo], &data.TransactionRecord{
+						Record: logRecord,
+						Pos:    logRecordPos,
+					})
+				}
 			}
 
-			if !ok {
-				return ErrIndexUpdateFailed
+			// 更新事务序列号
+			if seqNo > currentSeqNo {
+				currentSeqNo = seqNo
 			}
 
 			// 递增 offset，下一次从新的位置开始读取
@@ -373,6 +419,9 @@ func (db *DB) loadIndexFromDataFiles() error {
 			db.activeFile.WriteOff = offset
 		}
 	}
+
+	// 更新事务序列号
+	db.seqNo = currentSeqNo
 	return nil
 }
 

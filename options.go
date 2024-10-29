@@ -5,10 +5,8 @@ import "os"
 type Options struct {
 	// 数据库数据目录
 	DirPath string
-
 	// 数据文件的大小
 	DataFileSize int64
-
 	// 索引类型
 	IndexType IndexerType
 	// 每次写数据是否持久化
@@ -30,6 +28,19 @@ var DefaultOptions = Options{
 	DataFileSize: 256 * 1024 * 1024, // 256MB
 	SyncWrites:   false,
 	IndexType:    BTree,
+}
+
+// WriteBatchOptions 批量写配置项
+type WriteBatchOptions struct {
+	// 一个批次当中最大的数据量
+	MaxBatchNum uint
+	// 提交时是否 sync 持久化
+	SyncWrites bool
+}
+
+var DefaultWriteBatchOptions = WriteBatchOptions{
+	MaxBatchNum: 10000,
+	SyncWrites:  true,
 }
 
 // IteratorOptions 索引迭代器配置项
