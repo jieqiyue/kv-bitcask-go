@@ -72,6 +72,10 @@ func (bt *BTree) Iterator(reverse bool) Iterator {
 	return newBTreeIterator(bt.tree, reverse)
 }
 
+func (bt *BTree) Close() error {
+	return nil
+}
+
 // BTree 索引迭代器
 // 如果是BTree的话，就会把所有内存索引都取出来，然后放到数组中。然后定义了一个currentIndex，通过这个index能够做各种操作。
 type btreeIterator struct {
