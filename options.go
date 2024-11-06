@@ -5,12 +5,21 @@ import "os"
 type Options struct {
 	// 数据库数据目录
 	DirPath string
+
 	// 数据文件的大小
 	DataFileSize int64
-	// 索引类型
-	IndexType IndexerType
+
 	// 每次写数据是否持久化
 	SyncWrites bool
+
+	// 累计写到多少字节后进行持久化
+	BytesPerSync uint
+
+	// 索引类型
+	IndexType IndexerType
+
+	// 启动时是否使用 MMap 加载数据
+	MMapAtStartup bool
 }
 
 type IndexerType = int8
@@ -27,10 +36,12 @@ const (
 )
 
 var DefaultOptions = Options{
-	DirPath:      os.TempDir(),
-	DataFileSize: 256 * 1024 * 1024, // 256MB
-	SyncWrites:   false,
-	IndexType:    BPlusTree,
+	DirPath:       os.TempDir(),
+	DataFileSize:  256 * 1024 * 1024, // 256MB
+	SyncWrites:    false,
+	BytesPerSync:  0,
+	IndexType:     BTree,
+	MMapAtStartup: true,
 }
 
 // WriteBatchOptions 批量写配置项

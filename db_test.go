@@ -5,6 +5,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"os"
 	"testing"
+	"time"
 )
 
 // 测试完成之后销毁 DB 数据目录
@@ -32,11 +33,12 @@ func TestOpen(t *testing.T) {
 
 func TestDB_Put(t *testing.T) {
 	opts := DefaultOptions
-	dir, _ := os.MkdirTemp("", "bitcask-go-put")
-	opts.DirPath = dir
+	//dir, _ := os.MkdirTemp("", "bitcask-go")
+	opts.DirPath = "/tmp/bitcask-go"
 	opts.DataFileSize = 64 * 1024 * 1024
+	opts.IndexType = BPlusTree
 	db, err := Open(opts)
-	defer destroyDB(db)
+	//defer destroyDB(db)
 	assert.Nil(t, err)
 	assert.NotNil(t, db)
 
@@ -300,4 +302,39 @@ func TestDB_Sync(t *testing.T) {
 
 	err = db.Sync()
 	assert.Nil(t, err)
+}
+
+func TestDB_FileLock(t *testing.T) {
+	opts := DefaultOptions
+	dir, _ := os.MkdirTemp("", "bitcask-go-filelock")
+	opts.DirPath = dir
+	db, err := Open(opts)
+	defer destroyDB(db)
+	assert.Nil(t, err)
+	assert.NotNil(t, db)
+
+	_, err = Open(opts)
+	assert.Equal(t, ErrDatabaseIsUsing, err)
+
+	err = db.Close()
+	assert.Nil(t, err)
+
+	db2, err := Open(opts)
+	assert.Nil(t, err)
+	assert.NotNil(t, db2)
+	err = db2.Close()
+	assert.Nil(t, err)
+}
+
+func TestDB_OpenMMap(t *testing.T) {
+	opts := DefaultOptions
+	opts.DirPath = "/tmp/bitcask-go"
+	opts.MMapAtStartup = true
+
+	now := time.Now()
+	db, err := Open(opts)
+	t.Log("open time ", time.Since(now))
+
+	assert.Nil(t, err)
+	assert.NotNil(t, db)
 }
