@@ -370,6 +370,13 @@ func (db *DB) appendLogRecordWithLock(logRecord *data.LogRecord) (*data.LogRecor
 	return db.appendLogRecord(logRecord)
 }
 
+// Backup 备份数据库，将数据文件拷贝到新的目录中
+func (db *DB) Backup(dir string) error {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	return utils.CopyDir(db.options.DirPath, dir, []string{fileLockName})
+}
+
 // 追加写数据到活跃文件中
 func (db *DB) appendLogRecord(logRecord *data.LogRecord) (*data.LogRecordPos, error) {
 	// 判断当前活跃数据文件是否存在，因为数据库在没有写入的时候是没有文件生成的
