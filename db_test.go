@@ -56,6 +56,7 @@ func TestDB_Backup(t *testing.T) {
 	assert.Nil(t, err)
 	assert.NotNil(t, db2)
 }
+
 func TestDB_Put(t *testing.T) {
 	opts := DefaultOptions
 	//dir, _ := os.MkdirTemp("", "bitcask-go")
